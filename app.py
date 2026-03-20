@@ -2,7 +2,39 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+import requests
 import streamlit as st
+
+FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSemB7XiPBrg_BJx3k_m0o_JHXfbhleKEdwu78vVOVidEByCdw/formResponse"
+
+FIELD_TOOL_NAME = "entry.38392295"
+FIELD_EVENT_TYPE = "entry.1467972143"
+FIELD_INPUT_SOURCE = "entry.2139090681"
+FIELD_NOTE = "entry.2065255547"
+
+
+def is_keep_alive() -> bool:
+    try:
+        return str(st.query_params.get("keep_alive", "")).lower() in {"1", "true", "yes"}
+    except Exception:
+        return False
+
+
+def track(tool_name: str, event_type: str, input_source: str = "none", note: str = "") -> None:
+    if is_keep_alive():
+        return
+
+    data = {
+        FIELD_TOOL_NAME: tool_name,
+        FIELD_EVENT_TYPE: event_type,
+        FIELD_INPUT_SOURCE: input_source,
+        FIELD_NOTE: note,
+    }
+
+    try:
+        requests.post(FORM_URL, data=data, timeout=5)
+    except Exception:
+        pass
 
 
 st.set_page_config(
@@ -593,6 +625,10 @@ st.caption(
     "Paste an HTTP status code and API error response body to get a plain-English explanation, likely causes, and debugging suggestions."
 )
 
+if "tracked_visitor" not in st.session_state:
+    track("api-error-parser", "visitor")
+    st.session_state["tracked_visitor"] = True
+
 with st.sidebar:
     st.header("Examples")
     example_choice = st.selectbox(
@@ -647,6 +683,24 @@ raw_body = st.text_area(
 analyze_clicked = st.button("Analyze API Error", type="primary")
 
 if analyze_clicked:
+    input_clean = raw_body.strip()
+
+    is_exact_example = (
+        example_choice != "None"
+        and method == default_method
+        and endpoint == default_endpoint
+        and status_code_raw.strip() == str(default_status)
+        and raw_body.strip() == default_body.strip()
+    )
+
+    input_source = "example" if is_exact_example else "custom"
+
+    track(
+        tool_name="api-error-parser",
+        event_type="click",
+        input_source=input_source,
+    )
+
     status_code: Optional[int] = None
     if status_code_raw.strip():
         try:
@@ -655,12 +709,23 @@ if analyze_clicked:
             st.error("HTTP Status Code must be a number.")
             st.stop()
 
+    if not input_clean:
+        st.error("Please paste response body first.")
+        st.stop()
+
     result = analyze_api_error(
         status_code=status_code,
         raw_body=raw_body,
         endpoint=endpoint,
         method=method,
     )
+
+    if len(input_clean) > 20 and input_source == "custom":
+        track(
+            tool_name="api-error-parser",
+            event_type="qualified",
+            input_source=input_source,
+        )
 
     st.success("Analysis complete")
 
